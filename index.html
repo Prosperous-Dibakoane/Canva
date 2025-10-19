@@ -1,33 +1,218 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Drawing and Image Editing App</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            background-color: #f0f0f0;
-            margin: 0;
-            padding: 20px;
-        }
-
-    </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Editor</title>
+<style>
+:root{
+  --bg-light:#f9fafc;
+  --bg-toolbar:#fff;
+  --accent:#0078ff;
+  --text-dark:#333;
+  --border:#ddd;
+}
+body {margin:0; padding:20px; font-family:'Segoe UI',sans-serif; background:var(--bg-light); color:var(--text-dark); display:flex; flex-direction:column; align-items:center;}
+h1{margin-bottom:10px;}
+#toolbar{display:flex; flex-wrap:wrap; gap:10px; padding:10px 16px; background:var(--bg-toolbar); border-radius:10px; box-shadow:0 2px 12px rgba(0,0,0,0.1); margin-bottom:15px; justify-content:center;}
+#toolbar select, #toolbar button, #toolbar input[type=color]{padding:6px 12px; font-size:14px; border:1px solid var(--border); border-radius:6px; background:#fff; cursor:pointer; outline:none; transition:0.2s;}
+#toolbar button:hover, #toolbar select:hover { background:#eef6ff; border-color: var(--accent);}
+button.active{background: var(--accent); color:#fff;}
+#canvas{border:2px solid #444; border-radius:8px; background:#fff; box-shadow:0 3px 8px rgba(0,0,0,0.15);}
+#filters{margin-bottom:15px;}
+#filters button{margin:0 3px 3px 0; padding:5px 10px; border-radius:5px; border:1px solid var(--border); cursor:pointer;}
+#filters button:hover{background:#eef6ff;}
+#cropConfirm{position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:white; border-radius:10px; padding:20px; box-shadow:0 3px 15px rgba(0,0,0,0.3); text-align:center; display:none; z-index:1000;}
+#cropConfirm button{margin:5px;}
+</style>
 </head>
 <body>
-    <div id="toolbar">
-        <input type="color" id="colorPicker" value="#000000" title="Choose color">
-        <select id="brushSize" title="Brush size"></select>
-            <option value="2">Small</option>
-            <option value="5" selected>Medium</option>
-            <option value="10">Large</option>
-            <option value="20">Extra Large</option>
-        </select>
-        <button onclick="clearCanvas()">Clear Canvas</button>
-        <button onclick="document.getElementById('imageUpload').click()">Upload Image</button>
-        <input type="file" id="imageUpload" accept="image/*">
-        <button onclick="mirrorImage('horizontal')">Mirror Horizontal</button>
-        <button onclick="mirrorImage('vertical')">Mirror Vertical</button>
+
+<h1>Image Editor Editor</h1>
+
+<div id="toolbar">
+  <input type="color" id="colorPicker" value="#000000" title="Brush Color">
+  <select id="brushSize" title="Brush Size">
+    <option value="2">2px</option>
+    <option value="5" selected>5px</option>
+    <option value="10">10px</option>
+    <option value="20">20px</option>
+  </select>
+  <select id="toolSelect" title="Tool">
+    <option value="brush">✏️ Brush</option>
+    <option value="line">📏 Line</option>
+    <option value="rectangle">⬛ Rectangle</option>
+    <option value="circle">⚪ Circle</option>
+    <option value="select">🖱️ Move/Resize</option>
+    <option value="crop">✂️ Crop</option>
+    <option value="clothes">👕 Clothes</option>
+  </select>
+  <select id="cropRatio">
+    <option value="free">Free</option>
+    <option value="1">1:1</option>
+    <option value="16/9">16:9</option>
+    <option value="4/3">4:3</option>
+  </select>
+  <button onclick="undo()">↩️ Undo</button>
+  <button onclick="redo()">↪️ Redo</button>
+  <button onclick="clearCanvas()">🧹 Clear</button>
+  <button onclick="document.getElementById('imageUpload').click()">🖼️ Upload Person</button>
+  <input type="file" id="imageUpload" accept="image/*" style="display:none">
+  <button onclick="document.getElementById('clothesUpload').click()">👕 Upload Clothes</button>
+  <input type="file" id="clothesUpload" accept="image/*" style="display:none">
+  <button onclick="saveImage()">💾 Save</button>
+</div>
+
+<div id="filters">
+  <button onclick="applyFilter('grayscale(100%)')">Grayscale</button>
+  <button onclick="applyFilter('sepia(100%)')">Sepia</button>
+  <button onclick="applyFilter('invert(100%)')">Invert</button>
+  <button onclick="applyFilter('brightness(130%)')">Brighten</button>
+  <button onclick="applyFilter('contrast(150%)')">Contrast</button>
+  <button onclick="applyFilter('saturate(150%)')">Saturation</button>
+  <button onclick="applyFilter('hue-rotate(90deg)')">Hue</button>
+  <button onclick="applyFilter('blur(2px)')">Blur</button>
+  <button onclick="resetFilter()">Reset</button>
+</div>
+
+<canvas id="canvas" width="900" height="600"></canvas>
+
+<div id="cropConfirm">
+  <p>Crop this selection?</p>
+  <button onclick="confirmCrop()">✅ Yes</button>
+  <button onclick="cancelCrop()">❌ Cancel</button>
+</div>
+
+<script>
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+
+let tool='brush', drawing=false;
+let layers=[], shapes=[], undoStack=[], redoStack=[];
+let cropStart={}, cropWidth=0, cropHeight=0, cropping=false;
+
+let selectedLayer=null, action=null;
+let dragOffsetX=0, dragOffsetY=0;
+let initialMouse={x:0,y:0}, initialLayer=null;
+
+// toolbar bindings
+document.getElementById("colorPicker").addEventListener("change", e=>ctx.strokeStyle=e.target.value);
+document.getElementById("brushSize").addEventListener("change", e=>ctx.lineWidth=e.target.value);
+document.getElementById("toolSelect").addEventListener("change", e=>tool=e.target.value);
+
+// Image upload
+document.getElementById("imageUpload").addEventListener("change", e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const img=new Image(); img.onload=()=>{
+    layers[0]={type:'person',image:img,x:0,y:0,width:canvas.width,height:canvas.height,rotation:0};
+    redrawAll();
+  }; img.src=URL.createObjectURL(file);
+});
+
+// Clothes upload
+document.getElementById("clothesUpload").addEventListener("change", e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const img=new Image(); img.onload=()=>{
+    const layer={type:'clothes',image:img,x:100,y:100,width:img.width/2,height:img.height/2,rotation:0};
+    layers.push(layer);
+    redrawAll();
+  }; img.src=URL.createObjectURL(file);
+});
+
+// Mouse events
+canvas.addEventListener('mousedown', e=>{
+  const x=e.offsetX, y=e.offsetY;
+  if(tool==='select'){
+    for(let i=layers.length-1;i>=0;i--){
+      const l=layers[i];
+      if(l.type==='clothes'){
+        const inX=x-l.x, inY=y-l.y;
+        if(inX>0 && inX<l.width && inY>0 && inY<l.height){
+          selectedLayer=l; action='move';
+          dragOffsetX=inX; dragOffsetY=inY;
+          break;
+        }
+      }
+    }
+  } else if(tool==='brush'){drawing=true; ctx.beginPath(); ctx.moveTo(x,y);}
+  else if(tool==='crop'){drawing=true; cropStart={x,y}; cropping=true;}
+});
+
+canvas.addEventListener('mousemove', e=>{
+  const x=e.offsetX, y=e.offsetY;
+  if(tool==='select' && selectedLayer && action==='move'){
+    selectedLayer.x=x-dragOffsetX;
+    selectedLayer.y=y-dragOffsetY;
+    redrawAll();
+  } else if(tool==='brush' && drawing){
+    ctx.lineTo(x,y); ctx.stroke();
+  } else if(tool==='crop' && cropping){
+    cropWidth=x-cropStart.x; cropHeight=y-cropStart.y;
+    redrawAll();
+    ctx.strokeStyle='red'; ctx.lineWidth=2;
+    const ratio=document.getElementById("cropRatio").value;
+    let w=cropWidth,h=cropHeight;
+    if(ratio!=='free'){ const r=eval(ratio); if(Math.abs(w/h)>r) h=w/r; else w=h*r;}
+    ctx.strokeRect(cropStart.x,cropStart.y,w,h);
+  }
+});
+
+canvas.addEventListener('mouseup', e=>{selectedLayer=null; drawing=false; if(tool==='crop' && cropping) document.getElementById("cropConfirm").style.display='block';});
+
+// Draw layers
+function redrawAll(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  layers.forEach(l=>{
+    ctx.save();
+    ctx.translate(l.x+l.width/2,l.y+l.height/2);
+    ctx.rotate((l.rotation||0)*Math.PI/180);
+    ctx.drawImage(l.image,-l.width/2,-l.height/2,l.width,l.height);
+    if(tool==='select' && l.type==='clothes'){
+      ctx.strokeStyle='blue'; ctx.lineWidth=2;
+      ctx.strokeRect(-l.width/2,-l.height/2,l.width,l.height);
+    }
+    ctx.restore();
+  });
+  shapes.forEach(drawShape);
+}
+
+function drawShape(shape){
+  ctx.beginPath(); ctx.lineWidth=shape.lineWidth; ctx.strokeStyle=shape.color;
+  if(shape.type==='line'){ctx.moveTo(shape.x,shape.y); ctx.lineTo(shape.x+shape.w,shape.y+shape.h);}
+  else if(shape.type==='rectangle') ctx.rect(shape.x,shape.y,shape.w,shape.h);
+  else if(shape.type==='circle'){const r=Math.sqrt(shape.w**2+shape.h**2); ctx.arc(shape.x,shape.y,r,0,Math.PI*2);}
+  ctx.stroke();
+}
+
+// Undo/Redo
+function saveState(){undoStack.push(canvas.toDataURL()); redoStack=[];}
+function undo(){if(undoStack.length>0){redoStack.push(canvas.toDataURL()); const img=new Image(); img.src=undoStack.pop(); img.onload=()=>ctx.drawImage(img,0,0);}}
+function redo(){if(redoStack.length>0){undoStack.push(canvas.toDataURL()); const img=new Image(); img.src=redoStack.pop(); img.onload=()=>ctx.drawImage(img,0,0);}}
+function clearCanvas(){ctx.clearRect(0,0,canvas.width,canvas.height); layers=[]; shapes=[];}
+
+function saveImage(){const link=document.createElement('a'); link.download='tryon.png'; link.href=canvas.toDataURL(); link.click();}
+
+// Filters
+function applyFilter(f){canvas.style.filter=f;}
+function resetFilter(){canvas.style.filter='none';}
+
+// Crop
+function confirmCrop(){
+  document.getElementById("cropConfirm").style.display='none'; cropping=false;
+  const ratio=document.getElementById("cropRatio").value;
+  let w=cropWidth,h=cropHeight;
+  if(ratio!=='free'){ const r=eval(ratio); if(Math.abs(w/h)>r) h=w/r; else w=h*r;}
+  const imageData=ctx.getImageData(cropStart.x,cropStart.y,w,h);
+  canvas.width=w; canvas.height=h;
+  ctx.putImageData(imageData,0,0);
+  layers=layers.map(l=>{
+    if(l.type==='person'||l.type==='clothes'){return {...l,x:l.x-cropStart.x,y:l.y-cropStart.y};}
+    return l;
+  });
+  redrawAll();
+}
+function cancelCrop(){document.getElementById("cropConfirm").style.display='none'; cropping=false; redrawAll();}
+</script>
+
+</body>
+</html>
